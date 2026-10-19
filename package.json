@@ -1,0 +1,8 @@
+{
+  "name": "mobile-mcp-image",
+  "private": true,
+  "description": "Pinned runtime dependencies for the mobile-mcp container image",
+  "dependencies": {
+    "@mobilenext/mobile-mcp": "1.0.12"
+  }
+}
