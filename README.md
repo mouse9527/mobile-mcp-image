@@ -17,7 +17,8 @@ bundled with `adb` so it can drive an Android phone over Wi-Fi adb from a Kubern
 
 ## What the entrypoint does
 
-1. Refuses to start unless `MOBILEMCP_AUTH` is set (mobile-mcp otherwise serves without authentication).
+1. Refuses to start unless `MOBILEMCP_AUTH` is set (mobile-mcp otherwise serves without authentication),
+   or `MOBILEMCP_AUTH_DISABLED=1` explicitly allows that (for use behind an authenticating proxy). Setting both is an error.
 2. Copies `$ADB_KEY_DIR/adbkey` to `~/.android/adbkey` with mode 0600, so the phone's pairing survives restarts.
    adb derives the public key from the private key; no `adbkey.pub` is needed.
 3. Starts the adb server with mDNS off (`ADB_MDNS=0`; container networks usually drop multicast).
@@ -31,7 +32,8 @@ Telemetry (PostHog, scarf.sh) is off by default (`MOBILEMCP_DISABLE_TELEMETRY=1`
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MOBILEMCP_AUTH` | — (**required**) | Bearer token clients must send |
+| `MOBILEMCP_AUTH` | — (**required** unless disabled) | Bearer token clients must send |
+| `MOBILEMCP_AUTH_DISABLED` | unset | `1` = serve without authentication. Only behind something that enforces access (authenticating proxy + network policy) |
 | `PHONE_ADDR` | empty | Phone host name or IP. Empty = do not connect (the MCP server still starts) |
 | `PHONE_ADB_PORTS` | `5555` | Ports to try, space separated. `5555` after `adb tcpip 5555`; Android 11+ wireless debugging uses a random port |
 | `KEEPALIVE_SECONDS` | `20` | Reconnect check interval (minimum 5) |
