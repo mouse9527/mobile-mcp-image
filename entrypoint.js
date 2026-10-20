@@ -4,7 +4,10 @@
 // Written in JavaScript so the runtime image needs no shell.
 //
 // env:
-//   MOBILEMCP_AUTH     required: Bearer token for the MCP endpoint; refuses to start without it
+//   MOBILEMCP_AUTH     Bearer token for the MCP endpoint; refuses to start without it unless
+//                      MOBILEMCP_AUTH_DISABLED=1
+//   MOBILEMCP_AUTH_DISABLED  "1" = serve without authentication (only behind something that enforces
+//                      access, e.g. an authenticating proxy + NetworkPolicy). Setting both is an error.
 //   PHONE_ADDR         phone host name or IP; empty = do not connect (MCP still starts)
 //   PHONE_ADB_PORTS    ports to try in order, space separated (default "5555")
 //   KEEPALIVE_SECONDS  check interval (default 20)
@@ -19,8 +22,17 @@ const path = require("node:path");
 
 const log = (msg) => process.stderr.write(`mobile-mcp-image: ${msg}\n`);
 
-if (!process.env.MOBILEMCP_AUTH) {
-	log("MOBILEMCP_AUTH is not set; refusing to start without authentication");
+const authDisabled = process.env.MOBILEMCP_AUTH_DISABLED === "1";
+if (authDisabled && process.env.MOBILEMCP_AUTH) {
+	log("both MOBILEMCP_AUTH and MOBILEMCP_AUTH_DISABLED=1 are set; refusing to start (pick one)");
+	process.exit(1);
+}
+if (authDisabled) {
+	// mobile-mcp treats an unset token as "no auth"; drop an empty one so the intent is unambiguous
+	delete process.env.MOBILEMCP_AUTH;
+	log("WARNING MOBILEMCP_AUTH_DISABLED=1: serving without authentication; access must be enforced in front of this server");
+} else if (!process.env.MOBILEMCP_AUTH) {
+	log("MOBILEMCP_AUTH is not set; refusing to start without authentication (set MOBILEMCP_AUTH_DISABLED=1 to allow)");
 	process.exit(1);
 }
 

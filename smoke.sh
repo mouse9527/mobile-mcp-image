@@ -18,6 +18,33 @@ done
 docker rm -f "$NAME-noauth" >/dev/null
 echo "ok: refuses to start without MOBILEMCP_AUTH"
 
+# both set: ambiguous, must refuse
+docker run -d --name "$NAME-both" -e MOBILEMCP_AUTH=x -e MOBILEMCP_AUTH_DISABLED=1 "$IMG" >/dev/null
+for _ in $(seq 1 20); do
+  [ "$(docker inspect -f '{{.State.Running}}' "$NAME-both")" = false ] && break
+  sleep 1
+done
+[ "$(docker inspect -f '{{.State.Running}}' "$NAME-both")" = false ] || fail "still running with both auth settings"
+[ "$(docker inspect -f '{{.State.ExitCode}}' "$NAME-both")" != 0 ] || fail "exited 0 with both auth settings"
+docker rm -f "$NAME-both" >/dev/null
+echo "ok: refuses MOBILEMCP_AUTH together with MOBILEMCP_AUTH_DISABLED"
+
+# explicitly disabled: serves without a token
+DPORT=$((PORT + 1))
+docker run -d --name "$NAME-open" -p "127.0.0.1:${DPORT}:8931" -e MOBILEMCP_AUTH_DISABLED=1 "$IMG" >/dev/null
+trap 'cleanup; docker rm -f "$NAME-noauth" "$NAME-open" >/dev/null 2>&1 || true' EXIT
+for _ in $(seq 1 60); do
+  docker logs "$NAME-open" 2>&1 | grep -q "streamable http server listening" && break
+  sleep 1
+done
+docker logs "$NAME-open" 2>&1 | grep -q "streamable http server listening" || fail "auth-disabled server did not start"
+n=$(curl -s -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' "http://127.0.0.1:${DPORT}/mcp" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
+  | sed -n 's/^data: //p' | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["result"]["tools"]))')
+[ "$n" = 33 ] || fail "auth disabled: expected 33 tools without token, got $n"
+docker rm -f "$NAME-open" >/dev/null
+echo "ok: MOBILEMCP_AUTH_DISABLED=1 serves without token"
+
 docker run -d --name "$NAME" -p "127.0.0.1:${PORT}:8931" -e MOBILEMCP_AUTH=smoke "$IMG" >/dev/null
 for _ in $(seq 1 60); do
   docker logs "$NAME" 2>&1 | grep -q "streamable http server listening" && break
