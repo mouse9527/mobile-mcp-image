@@ -30,7 +30,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund --update-notifier=false \
  && test -x "node_modules/@mobilenext/mobilecli-linux-$(dpkg --print-architecture)/mobilecli-linux-$(dpkg --print-architecture)" \
  && ls node_modules/@mobilenext
-COPY entrypoint.js ./
+COPY entrypoint.js gateway.js ./
 
 FROM ${RUNTIME_IMAGE}
 COPY --from=build /opt/platform-tools /opt/platform-tools
