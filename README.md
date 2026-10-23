@@ -69,6 +69,41 @@ docker exec -it <container> adb -s <phone>:<debug port> tcpip 5555   # switch to
 
 After a phone reboot `tcpip 5555` is lost: re-enable Wireless debugging and run the last two commands again with the new port.
 
+## Lease gateway (optional, `PHONE_LEASE=1`)
+
+When several agents share one phone through an MCP gateway that opens a new upstream session for every tool call
+(LiteLLM does), per-session locking is useless and multi-step tasks interleave (agent A reads the screen, agent B
+opens another app, agent A taps). With `PHONE_LEASE=1` the entrypoint puts a small gateway (`gateway.js`, same
+process, no dependencies) on `MCP_LISTEN` and moves mobile-mcp to `LEASE_INNER_LISTEN` (default `127.0.0.1:8932`).
+mobile-mcp itself is unchanged; with the variable unset nothing changes.
+
+- **One holder at a time.** A holder's tool call takes the phone if it is free and nobody is queued; every call extends
+  the lease to now + `LEASE_IDLE_S`. Others wait FIFO inside their call for up to `LEASE_WAIT_S`, then get a tool error
+  (`isError`) saying the phone is busy and their queue position (kept `LEASE_TICKET_S`). The queue head gets the phone
+  when the lease ends, reserved for `LEASE_GRACE_S`. State is in memory: a restart frees the phone.
+- **Who is the holder** (first match): `x-phone-holder` header (set by the client's MCP config) > `x-openwebui-chat-id`
+  (Open WebUI) > the client's MCP session id at the gateway in front, forwarded as `mcp-session-id` (mobile-mcp is
+  stateless, so it is on every request) > nothing (call-level exclusion only, never keeps the phone). A client session
+  seen for the first time only gets `LEASE_SESSION_FIRST_IDLE_S`, so callers that open a new session per call do not
+  wait behind themselves. LiteLLM: list `mcp-session-id`, `x-openwebui-chat-id`, `x-phone-holder` in the server's
+  `extra_headers`.
+- **Extra tools** in `tools/list`: `lease_status`, `lease_hold` (`seconds`, keep the phone while waiting for the user,
+  capped at `LEASE_HOLD_MAX_S`), `lease_release`. `LEASE_TOKENS=1` also adds `lease_acquire` and an optional `lease`
+  argument on every tool, for callers that cannot be identified otherwise (off by default: it changes tool schemas).
+- **Logs**: one JSON line per event on stderr (`"src":"lease"`): time, event, a sha256 prefix of the holder, how it was
+  identified, tool name, wait time. Never arguments, results or raw holder ids.
+
+| Variable | Default |
+|---|---|
+| `LEASE_IDLE_S` | `120` |
+| `LEASE_SESSION_FIRST_IDLE_S` | `30` |
+| `LEASE_WAIT_S` | `45` |
+| `LEASE_TICKET_S` | `90` |
+| `LEASE_GRACE_S` | `30` |
+| `LEASE_HOLD_MAX_S` | `600` |
+| `LEASE_TOKENS` | unset (off) |
+| `LEASE_INNER_LISTEN` | `127.0.0.1:8932` |
+
 ## Security notes
 
 - Anyone holding the Bearer token can fully control the phone (tap, type, install / uninstall apps, open any URL scheme).
@@ -89,7 +124,8 @@ After a phone reboot `tcpip 5555` is lost: re-enable Wireless debugging and run 
 
 `.github/workflows/image.yml`: build linux/amd64 → `audit.sh` (no adb keys, credentials or `.git` in the image;
 file list and hashes uploaded as an artifact) → `smoke.sh` (refuses to start without a token, 401 without token,
-33 tools, adb ≥ 37, uid 1000, no shell, telemetry off) → push to ghcr from `main` only.
+33 tools, adb ≥ 37, uid 1000, no shell, telemetry off; lease gateway with `PHONE_LEASE=1`: queueing, release, FIFO,
+hold, holder identity, first-call probation — `smoke/lease_test.py`) → push to ghcr from `main` only.
 
 ## License
 
