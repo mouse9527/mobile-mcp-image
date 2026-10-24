@@ -143,5 +143,18 @@ check('lease_hold: capped to 8 s, keeps the phone past idle, a non-holder cannot
       hold_ok and '8 秒' in hold_txt and not okB and not nh)
 call('lease_release', holder='A')
 
+# a queued caller that stopped waiting does not get the phone parked for it when the hold ends (k8s#87 follow-up)
+settle()
+call('lease_hold', {'seconds': 6}, holder='H1')
+okq, txtq, _ = call(holder='Q')            # waits 2 s, refused: Q has a place in the queue but no call waiting
+call('lease_release', holder='H1')
+okh2, _, sh2 = call('lease_hold', {'seconds': 5}, holder='H2')
+check('hold ends, queued caller not waiting -> someone else can hold at once', not okq and '第 1 位' in txtq and okh2 and sh2 < 1.0,
+      f'{sh2:.1f}s')
+call('lease_release', holder='H2')
+okc, _, sc = call(holder='H3')
+check('… and call at once (no 30 s grace parked for the absent caller)', okc and sc < 1.0, f'{sc:.1f}s')
+call('lease_release', holder='H3')
+
 print('lease smoke %d/%d' % (sum(RES), len(RES)))
 sys.exit(0 if all(RES) else 1)

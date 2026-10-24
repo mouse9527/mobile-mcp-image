@@ -79,8 +79,9 @@ mobile-mcp itself is unchanged; with the variable unset nothing changes.
 
 - **One holder at a time.** A holder's tool call takes the phone if it is free and nobody is queued; every call extends
   the lease to now + `LEASE_IDLE_S`. Others wait FIFO inside their call for up to `LEASE_WAIT_S`, then get a tool error
-  (`isError`) saying the phone is busy and their queue position (kept `LEASE_TICKET_S`). The queue head gets the phone
-  when the lease ends, reserved for `LEASE_GRACE_S`. State is in memory: a restart frees the phone.
+  (`isError`) saying the phone is busy and their queue position (kept `LEASE_TICKET_S`, while someone holds the phone).
+  When the lease ends, the first caller still **waiting** in a call gets it, reserved `LEASE_GRACE_S` for its next call;
+  queued callers that are not waiting any more are skipped, so the phone is never parked for someone who left. State is in memory: a restart frees the phone.
 - **Who is the holder** (first match): `x-phone-holder` header (set by the client's MCP config) > `x-openwebui-chat-id`
   (Open WebUI) > the client's MCP session id at the gateway in front, forwarded as `mcp-session-id` (mobile-mcp is
   stateless, so it is on every request) > nothing (call-level exclusion only, never keeps the phone). A client session
