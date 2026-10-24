@@ -14,8 +14,9 @@
 //
 // Lease rules: a holder's call takes the lease when the phone is free and nobody is queued ahead; every call extends
 // it to now + LEASE_IDLE_S (running calls never expire). Others wait FIFO up to LEASE_WAIT_S inside their call, then
-// get a "phone busy" tool error with their position (kept LEASE_TICKET_S). When a lease ends, the queue head gets it,
-// reserved LEASE_GRACE_S. lease_hold(seconds) keeps it while waiting for the user (<= LEASE_HOLD_MAX_S);
+// get a "phone busy" tool error with their position (kept LEASE_TICKET_S, but only while someone holds the phone). When a
+// lease ends, the first caller still WAITING in a call gets it (reserved LEASE_GRACE_S to make its next call); queued
+// callers that are not waiting are skipped, so a finished hold never parks the phone for someone who left. lease_hold(seconds) keeps it while waiting for the user (<= LEASE_HOLD_MAX_S);
 // lease_release ends it. State is in memory: a restart frees the phone.
 //
 // Logs (stderr, JSON lines): time, event, holder hash, via, tool, wait ms. Never arguments, results or raw ids.
@@ -84,12 +85,22 @@ function tick() {
 		if (holder.via === "token") tokens.delete(holder.id.slice(6));
 		holder = null;
 	}
-	if (holder) return;
-	while (queue.length && queue[0].ticketUntil < t && queue[0].waiters.length === 0) queue.shift();
+	if (holder) {
+		// expired places of callers that stopped waiting
+		for (let i = queue.length - 1; i >= 0; i--) if (queue[i].ticketUntil < t && queue[i].waiters.length === 0) queue.splice(i, 1);
+		return;
+	}
+	// The phone is free: it goes to the first caller that is WAITING right now (a call blocked in the gateway). Places of
+	// callers that are not waiting (gave up after LEASE_WAIT_S, chat over) only count while someone else holds the phone;
+	// once it is free they are dropped and the next caller, waiting or new, gets it at once (k8s#87).
+	while (queue.length && queue[0].waiters.length === 0) {
+		const gone = queue.shift();
+		if (!gone.who.transient) log("queue_skipped_not_waiting", gone.who);
+	}
 	const next = queue.shift();
 	if (!next) return;
 	holder = { ...next.who, since: t, expiresAt: t + (next.who.transient ? 0 : GRACE), inflight: 0 };
-	if (!next.who.transient) log("lease_granted_from_queue", next.who, { waiting_now: next.waiters.length > 0 });
+	if (!next.who.transient) log("lease_granted_from_queue", next.who);
 	for (const w of next.waiters) w(true);
 }
 setInterval(tick, 250).unref();
@@ -131,7 +142,7 @@ function busyText(who) {
 	const busy = holder ? Math.round((now() - holder.since) / 1000) : 0;
 	const left = holder ? Math.max(0, Math.round((holder.expiresAt - now()) / 1000)) : 0;
 	return `手机正在被另一个任务使用（已占用 ${busy} 秒，若对方不再操作最晚约 ${left} 秒后释放）。` +
-		(who.transient ? "" : `你排在第 ${position(who)} 位，位置保留 ${TICKET / 1000} 秒。`) +
+		(who.transient ? "" : `你排在第 ${position(who)} 位；对方占着期间位置保留 ${TICKET / 1000} 秒，手机空出来时你若没有在等的调用就不再保留（先到先得）。`) +
 		"不要改用别的方式操作手机；稍后重试同一个操作，或先告诉用户手机正被占用、问要不要等。";
 }
 
