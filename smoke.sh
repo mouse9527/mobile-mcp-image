@@ -132,6 +132,21 @@ wake_run '{"wake":"Awake","calls":[]}' >/dev/null
 [ "$(grep -o "dumpsys power" "$WDIR/phone.json" | wc -l)" -eq 1 ] || fail "wake: awake screen should be checked once"
 if grep -q keyevent "$WDIR/phone.json"; then fail "wake: key pressed on an awake screen"; fi
 echo "ok: an awake screen is only checked, no keys"
+# the user switched the screen off right after a check: an action (tap) is checked again and woken first
+echo '{"wake":"Awake","calls":[]}' > "$WDIR/phone.json"
+python3 - "http://127.0.0.1:${WPORT}/mcp" "$WDIR/phone.json" <<'PY'
+import json, re, sys, urllib.request
+def post(b):
+    r = urllib.request.Request(sys.argv[1], data=json.dumps(b).encode(), method='POST', headers={
+        'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream', 'x-phone-holder': 'smoke'})
+    urllib.request.urlopen(r, timeout=60).read()
+post({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18', 'capabilities': {}, 'clientInfo': {'name': 's', 'version': '0'}}})
+post({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {'name': 'mobile_list_elements_on_screen', 'arguments': {'device': 'phone.lan:5555'}}})
+st = json.load(open(sys.argv[2])); st['wake'] = 'Dozing'; json.dump(st, open(sys.argv[2], 'w'))
+post({'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {'name': 'mobile_click_on_screen_at_coordinates', 'arguments': {'device': 'phone.lan:5555', 'x': 1, 'y': 1}}})
+PY
+grep -q '"wake":"Awake"' "$WDIR/phone.json" || fail "an action right after the screen went off was not woken"
+echo "ok: actions are always checked (screen switched off right after a check gets woken before a tap)"
 docker rm -f "$NAME-wake" >/dev/null; rm -rf "$WDIR"
 
 echo "SMOKE PASS"

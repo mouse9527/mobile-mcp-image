@@ -8,7 +8,7 @@ const { execFile } = require("node:child_process");
 const env = (k, d) => Number(process.env[k] || d);
 const WAKE = process.env.PHONE_WAKE === "1";
 const TRIM = process.env.ELEMENTS_TRIM === "1";
-const CHECK_EVERY = env("WAKE_CHECK_S", 15) * 1000; // after a check / a successful call, trust "awake" this long
+const CHECK_EVERY = env("WAKE_CHECK_S", 15) * 1000; // reads trust an "Awake" from dumpsys this long
 const SETTLE = env("WAKE_SETTLE_MS", 800); // let the foreground app draw after waking
 const ADB = process.env.WAKE_ADB || "adb";
 
@@ -54,7 +54,10 @@ async function wakefulness() {
 
 // -> {ok, woke, detail}; never presses POWER (a toggle). KEYCODE_WAKEUP is a no-op on a screen that is already on.
 async function ensureAwake(tool, log) {
-	if (!WAKE || NO_SCREEN.has(tool) || Date.now() < awakeUntil) return { ok: true, woke: false };
+	if (!WAKE || NO_SCREEN.has(tool)) return { ok: true, woke: false };
+	// reads may trust a recent check (a failed read is woken and retried); actions (tap, swipe, type, keys, launch) are
+	// never retried, so they always check: the user may have switched the screen off a moment ago
+	if (RETRYABLE.has(tool) && Date.now() < awakeUntil) return { ok: true, woke: false };
 	const w = await wakefulness();
 	if (w === "Awake") {
 		awakeUntil = Date.now() + CHECK_EVERY;
@@ -74,21 +77,27 @@ async function ensureAwake(tool, log) {
 	return { ok: true, woke: true };
 }
 
-// a read-only call failed with "no UI hierarchy" although the screen is on: MIUI's pocket mode ("已进入防误触模式") or a
-// screen that went off between check and call. One recovery round, then give up with a clear message.
-async function recover(log) {
+// a read-only call failed. Screen off (switched off since the last check; on some phones the read then fails with a
+// generic mobilecli error, not "no UI hierarchy") -> wake. Screen on but no UI hierarchy -> MIUI pocket mode
+// ("已进入防误触模式"), which volume up + down ends. Otherwise the error is not about the screen: no retry.
+// -> true when the call should be retried (once)
+async function recover(errorText, log) {
 	awakeUntil = 0;
 	const w = await wakefulness();
-	if (w !== "Awake") {
+	let action = null;
+	if (w && w !== "Awake") {
 		await shell("input", "keyevent", "KEYCODE_WAKEUP");
 		await shell("wm", "dismiss-keyguard");
-	} else {
-		// pocket mode exits with volume up + down (its own hint); pressing both leaves the volume unchanged
-		await shell("input", "keyevent", "KEYCODE_VOLUME_UP");
+		action = "wakeup";
+	} else if (w === "Awake" && NO_UI.test(errorText)) {
+		await shell("input", "keyevent", "KEYCODE_VOLUME_UP"); // both: the volume ends up unchanged
 		await shell("input", "keyevent", "KEYCODE_VOLUME_DOWN");
+		action = "volume_up_down";
 	}
+	if (!action) return false;
 	await new Promise((r) => setTimeout(r, SETTLE));
-	log("screen_recover", { from: w, action: w !== "Awake" ? "wakeup" : "volume_up_down" });
+	log("screen_recover", { from: w, action });
+	return true;
 }
 
 const WAKE_FAILED = (detail) => `手机屏幕没能自动点亮或解除遮挡：${detail}。不要按电源键反复尝试；` +
@@ -141,5 +150,4 @@ function trimElements(text) {
 	}).join("");
 }
 
-module.exports = { WAKE, TRIM, NO_SCREEN, RETRYABLE, NO_UI, ensureAwake, recover, trimElements, trimBlock, WAKE_FAILED,
-	markAwake: () => { if (WAKE) awakeUntil = Date.now() + CHECK_EVERY; } };
+module.exports = { WAKE, TRIM, NO_SCREEN, RETRYABLE, NO_UI, ensureAwake, recover, trimElements, trimBlock, WAKE_FAILED };

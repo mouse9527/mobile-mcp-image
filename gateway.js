@@ -321,18 +321,17 @@ async function callPhone(req, res, msg, tool, args, log) {
 	if (!awake.ok) return sendJson(res, toolResult(msg.id, screen.WAKE_FAILED(awake.detail), true));
 	let r = await upstream(req, body);
 	let out = unwrap(r.data);
-	if (screen.WAKE && screen.RETRYABLE.has(tool) && screen.NO_UI.test(resultText(out) + JSON.stringify((out && out.error) || ""))) {
-		await screen.recover(log);
+	const failed = (o) => !o || o.error || (o.result && o.result.isError);
+	if (screen.WAKE && screen.RETRYABLE.has(tool) && failed(out)
+		&& await screen.recover(resultText(out) + JSON.stringify((out && out.error) || ""), log)) {
 		r = await upstream(req, body);
 		out = unwrap(r.data);
-		if (screen.NO_UI.test(resultText(out) + JSON.stringify((out && out.error) || ""))) {
-			log("screen_still_no_ui", { tool });
+		if (failed(out)) {
+			log("screen_still_failing", { tool });
 			return sendJson(res, toolResult(msg.id, screen.WAKE_FAILED("点亮后仍读不到界面（可能被遮挡，或是不允许读取的安全页面）"), true));
 		}
 	}
 	if (out && out.result && !out.result.isError) {
-		// only a call that needed the screen proves it is on (listing devices does not)
-		if (!screen.NO_SCREEN.has(tool)) screen.markAwake();
 		if (screen.TRIM && (tool === "mobile_list_elements_on_screen" || tool === "mobile_batch_commands") && args.format !== "json") {
 			for (const c of out.result.content || []) if (c.type === "text") c.text = screen.trimElements(c.text);
 		}
