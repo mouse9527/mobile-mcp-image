@@ -113,6 +113,7 @@ def post(b):
     m = re.search(r'^data: (.*)$', raw, re.M)
     return json.loads(m.group(1)) if m else (json.loads(raw) if raw.strip() else {})  # gateway errors are plain JSON
 post({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18', 'capabilities': {}, 'clientInfo': {'name': 's', 'version': '0'}}})
+post({'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {'name': 'mobile_list_available_devices', 'arguments': {}}})  # what models call first
 r = post({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {'name': 'mobile_list_elements_on_screen', 'arguments': {'device': 'phone.lan:5555'}}})
 print(''.join(c.get('text', '') for c in (r.get('result') or {}).get('content', [])))
 PY
@@ -122,7 +123,7 @@ grep -q KEYCODE_WAKEUP "$WDIR/phone.json" || fail "wake: no KEYCODE_WAKEUP"
 grep -q '"wake":"Awake"' "$WDIR/phone.json" || fail "wake: still asleep"
 if grep -q POWER "$WDIR/phone.json"; then fail "wake pressed POWER"; fi
 docker logs "$NAME-wake" 2>&1 | grep '"event":"screen_woken"' >/dev/null || fail "wake: no screen_woken log"
-echo "ok: PHONE_WAKE wakes a dozing screen with KEYCODE_WAKEUP (never POWER) before the call"
+echo "ok: PHONE_WAKE wakes a dozing screen with KEYCODE_WAKEUP (never POWER) before the call, also right after listing devices"
 out=$(wake_run '{"wake":"Dozing","stuck":true,"calls":[]}')
 echo "$out" | grep -q "没能自动点亮" || fail "wake: no clear error when the screen stays off"
 [ "$(grep -o KEYCODE_WAKEUP "$WDIR/phone.json" | wc -l)" -eq 1 ] || fail "wake: more than one WAKEUP when it does not wake"

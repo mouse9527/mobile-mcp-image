@@ -331,7 +331,8 @@ async function callPhone(req, res, msg, tool, args, log) {
 		}
 	}
 	if (out && out.result && !out.result.isError) {
-		screen.markAwake();
+		// only a call that needed the screen proves it is on (listing devices does not)
+		if (!screen.NO_SCREEN.has(tool)) screen.markAwake();
 		if (screen.TRIM && (tool === "mobile_list_elements_on_screen" || tool === "mobile_batch_commands") && args.format !== "json") {
 			for (const c of out.result.content || []) if (c.type === "text") c.text = screen.trimElements(c.text);
 		}
