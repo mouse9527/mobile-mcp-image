@@ -20,7 +20,7 @@ find "$ROOTFS" -xdev \( -name 'adbkey*' -o -name '.git' -o -name '.env' -o -name
 
 # private key bodies (BEGIN line followed by base64), blocking on our paths only
 KEYRE='-----BEGIN [A-Z ]*PRIVATE KEY-----\r?\n[A-Za-z0-9+/=]{40,}\r?\n'
-for d in app/entrypoint.js app/gateway.js app/package.json app/package-lock.json opt/platform-tools tmp home root; do
+for d in app/entrypoint.js app/gateway.js app/screen.js app/package.json app/package-lock.json opt/platform-tools tmp home root; do
   [ -e "$ROOTFS/$d" ] && grep -rlIPz -e "$KEYRE" "$ROOTFS/$d" 2>/dev/null | tr '\0' '\n' | sed "s#^$ROOTFS##" || true
 done >> "$OUT/forbidden-files.txt"
 # record only: third-party trees (test fixtures, CA bundles)
@@ -30,7 +30,7 @@ grep -rlPz -e "$KEYRE" "$ROOTFS/app/node_modules" "$ROOTFS/usr" "$ROOTFS/etc/ssl
 grep -inE 'password|secret|token=|_auth=|MOBILEMCP_AUTH=' "$OUT/history.txt" "$OUT/env.json" > "$OUT/suspicious-config.txt" || true
 
 # 3) our own files, with hashes
-sha256sum "$ROOTFS/app/entrypoint.js" "$ROOTFS/app/gateway.js" "$ROOTFS/app/package.json" "$ROOTFS/app/package-lock.json" \
+sha256sum "$ROOTFS/app/entrypoint.js" "$ROOTFS/app/gateway.js" "$ROOTFS/app/screen.js" "$ROOTFS/app/package.json" "$ROOTFS/app/package-lock.json" \
   "$ROOTFS/opt/platform-tools/adb" "$ROOTFS"/app/node_modules/@mobilenext/mobilecli-*/mobilecli-* > "$OUT/ours.raw"
 sed "s#$ROOTFS##" "$OUT/ours.raw" > "$OUT/ours.txt" && rm "$OUT/ours.raw"
 ls "$ROOTFS/app/node_modules/@mobilenext/" > "$OUT/mobilenext-packages.txt"

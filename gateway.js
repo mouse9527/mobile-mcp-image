@@ -23,6 +23,7 @@
 "use strict";
 const http = require("node:http");
 const crypto = require("node:crypto");
+const screen = require("./screen.js");
 
 const env = (k, d) => Number(process.env[k] || d);
 const LISTEN = env("LEASE_PORT", 8931);
@@ -270,7 +271,7 @@ async function onToolCall(req, res, msg) {
 	const waited = now() - t0;
 	holder.inflight++;
 	try {
-		await forward(req, JSON.stringify({ ...msg, params: { ...msg.params, arguments: args } }), res);
+		await callPhone(req, res, msg, tool, args, (event, extra) => log(event, who, extra));
 	} finally {
 		if (holder && holder.id === who.id) {
 			holder.inflight--;
@@ -285,6 +286,60 @@ async function onToolCall(req, res, msg) {
 		log("call", who, { tool, wait_ms: waited, total_ms: now() - t0 });
 		tick();
 	}
+}
+
+// one buffered upstream request -> {status, headers, data}
+function upstream(req, body) {
+	const headers = { ...req.headers, host: UPSTREAM.host, "content-length": Buffer.byteLength(body) };
+	return new Promise((resolve) => {
+		const up = http.request({ hostname: UPSTREAM.hostname, port: UPSTREAM.port, path: UPSTREAM.pathname, agent: false,
+			method: "POST", headers }, (ur) => {
+			let data = "";
+			ur.on("data", (c) => (data += c));
+			ur.on("end", () => resolve({ status: ur.statusCode, headers: ur.headers, data }));
+		});
+		up.on("error", (e) => resolve({ status: 502, headers: {}, data: String(e.message) }));
+		up.write(body);
+		up.end();
+	});
+}
+
+// the JSON-RPC message inside an upstream reply (SSE or plain JSON), and a writer that keeps the framing
+function unwrap(data) {
+	const m = data.match(/^data: (.*)$/m);
+	try { return m ? JSON.parse(m[1]) : JSON.parse(data); } catch { return null; }
+}
+const rewrap = (data, msg) => (/^data: /m.test(data) ? data.replace(/^data: .*$/m, () => "data: " + JSON.stringify(msg)) : JSON.stringify(msg));
+const resultText = (msg) => ((msg && msg.result && msg.result.content) || []).filter((c) => c.type === "text").map((c) => c.text).join("\n");
+
+// a phone tool call: screen on first (PHONE_WAKE), one recovery + retry when a read-only call finds no UI hierarchy,
+// element lists trimmed (ELEMENTS_TRIM). With both switches off this is a plain pass-through.
+async function callPhone(req, res, msg, tool, args, log) {
+	const body = JSON.stringify({ ...msg, params: { ...msg.params, arguments: args } });
+	if (!screen.WAKE && !screen.TRIM) return forward(req, body, res);
+	const awake = await screen.ensureAwake(tool, log);
+	if (!awake.ok) return sendJson(res, toolResult(msg.id, screen.WAKE_FAILED(awake.detail), true));
+	let r = await upstream(req, body);
+	let out = unwrap(r.data);
+	if (screen.WAKE && screen.RETRYABLE.has(tool) && screen.NO_UI.test(resultText(out) + JSON.stringify((out && out.error) || ""))) {
+		await screen.recover(log);
+		r = await upstream(req, body);
+		out = unwrap(r.data);
+		if (screen.NO_UI.test(resultText(out) + JSON.stringify((out && out.error) || ""))) {
+			log("screen_still_no_ui", { tool });
+			return sendJson(res, toolResult(msg.id, screen.WAKE_FAILED("点亮后仍读不到界面（可能被遮挡，或是不允许读取的安全页面）"), true));
+		}
+	}
+	if (out && out.result && !out.result.isError) {
+		screen.markAwake();
+		if (screen.TRIM && (tool === "mobile_list_elements_on_screen" || tool === "mobile_batch_commands") && args.format !== "json") {
+			for (const c of out.result.content || []) if (c.type === "text") c.text = screen.trimElements(c.text);
+		}
+	}
+	const h = { ...r.headers };
+	delete h["content-length"];
+	res.writeHead(r.status, h);
+	res.end(out ? rewrap(r.data, out) : r.data);
 }
 
 http.createServer((req, res) => {

@@ -105,6 +105,21 @@ mobile-mcp itself is unchanged; with the variable unset nothing changes.
 | `LEASE_TOKENS` | unset (off) |
 | `LEASE_INNER_LISTEN` | `127.0.0.1:8932` |
 
+## Screen helpers (optional, with the lease gateway)
+
+- `PHONE_WAKE=1`: before a tool that needs the screen, the gateway checks `dumpsys power` (at most every `WAKE_CHECK_S`,
+  default 15 s, also refreshed by every successful call). If the screen is not `Awake`: `KEYCODE_WAKEUP` (never POWER,
+  which toggles), `wm dismiss-keyguard` (for phones without a lock-screen password), wait `WAKE_SETTLE_MS` (800), check
+  again; still off → a clear tool error, mobile-mcp is not called. A read-only call (elements, foreground app,
+  screenshot) that still finds no UI hierarchy gets one recovery round (screen on: VOLUME_UP + VOLUME_DOWN, which ends
+  MIUI's pocket mode; screen off: WAKEUP again) and one retry, then a clear error. Uses the adb server of the container.
+- `ELEMENTS_TRIM=1`: shorter `mobile_list_elements_on_screen` text (also inside `mobile_batch_commands`): identical
+  overlapping elements listed once, zero-size ones dropped, resource ids without the package prefix, a label equal to the
+  text written once, centre point `c=x,y` instead of the top-left corner. No visible string is dropped and refs keep their
+  original numbers (taps by ref re-read the screen). `format=json` is not touched.
+- Both off unless set; with both off tool calls are passed through unchanged. Log events: `screen_woken`,
+  `screen_recover`, `screen_still_no_ui`, `screen_check_failed`.
+
 ## Security notes
 
 - Anyone holding the Bearer token can fully control the phone (tap, type, install / uninstall apps, open any URL scheme).

@@ -94,4 +94,43 @@ if docker logs "$NAME-lease" 2>&1 | grep -E 'chat-1|cs-1|"holder":"[^h]' >/dev/n
 docker rm -f "$NAME-lease" >/dev/null
 echo "ok: lease gateway (PHONE_LEASE=1)"
 
+# screen helpers (PHONE_WAKE / ELEMENTS_TRIM): trimming unit test, then waking with a stand-in adb (no phone)
+node "$(dirname "$0")/smoke/screen_test.js" || fail "element trimming"
+WPORT=$((PORT + 3)); WDIR=$(mktemp -d); chmod 777 "$WDIR"
+wake_run() { # wake_run <state json>: one list_elements call through the gateway with PHONE_WAKE=1; prints the tool text
+  echo "$1" > "$WDIR/phone.json"; chmod 666 "$WDIR/phone.json"
+  docker rm -f "$NAME-wake" >/dev/null 2>&1 || true
+  docker run -d --name "$NAME-wake" -p "127.0.0.1:${WPORT}:8931" -e MOBILEMCP_AUTH_DISABLED=1 -e PHONE_LEASE=1 -e PHONE_WAKE=1 \
+    -e ELEMENTS_TRIM=1 -e WAKE_ADB=/smoke/fake_adb.js -e FAKE_PHONE_STATE=/state/phone.json -e WAKE_SETTLE_MS=50 \
+    -v "$(cd "$(dirname "$0")" && pwd)/smoke:/smoke:ro" -v "$WDIR:/state" "$IMG" >/dev/null
+  for _ in $(seq 1 60); do docker logs "$NAME-wake" 2>&1 | grep "streamable http server listening" >/dev/null && break; sleep 1; done
+  python3 - "http://127.0.0.1:${WPORT}/mcp" <<'PY'
+import json, re, sys, urllib.request
+def post(b):
+    r = urllib.request.Request(sys.argv[1], data=json.dumps(b).encode(), method='POST', headers={
+        'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream', 'x-phone-holder': 'smoke'})
+    raw = urllib.request.urlopen(r, timeout=60).read().decode()
+    m = re.search(r'^data: (.*)$', raw, re.M)
+    return json.loads(m.group(1)) if m else (json.loads(raw) if raw.strip() else {})  # gateway errors are plain JSON
+post({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18', 'capabilities': {}, 'clientInfo': {'name': 's', 'version': '0'}}})
+r = post({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {'name': 'mobile_list_elements_on_screen', 'arguments': {'device': 'phone.lan:5555'}}})
+print(''.join(c.get('text', '') for c in (r.get('result') or {}).get('content', [])))
+PY
+}
+wake_run '{"wake":"Dozing","calls":[]}' >/dev/null
+grep -q KEYCODE_WAKEUP "$WDIR/phone.json" || fail "wake: no KEYCODE_WAKEUP"
+grep -q '"wake":"Awake"' "$WDIR/phone.json" || fail "wake: still asleep"
+if grep -q POWER "$WDIR/phone.json"; then fail "wake pressed POWER"; fi
+docker logs "$NAME-wake" 2>&1 | grep '"event":"screen_woken"' >/dev/null || fail "wake: no screen_woken log"
+echo "ok: PHONE_WAKE wakes a dozing screen with KEYCODE_WAKEUP (never POWER) before the call"
+out=$(wake_run '{"wake":"Dozing","stuck":true,"calls":[]}')
+echo "$out" | grep -q "没能自动点亮" || fail "wake: no clear error when the screen stays off"
+[ "$(grep -o KEYCODE_WAKEUP "$WDIR/phone.json" | wc -l)" -eq 1 ] || fail "wake: more than one WAKEUP when it does not wake"
+echo "ok: a screen that will not wake gives a clear error after one attempt"
+wake_run '{"wake":"Awake","calls":[]}' >/dev/null
+[ "$(grep -o "dumpsys power" "$WDIR/phone.json" | wc -l)" -eq 1 ] || fail "wake: awake screen should be checked once"
+if grep -q keyevent "$WDIR/phone.json"; then fail "wake: key pressed on an awake screen"; fi
+echo "ok: an awake screen is only checked, no keys"
+docker rm -f "$NAME-wake" >/dev/null; rm -rf "$WDIR"
+
 echo "SMOKE PASS"
