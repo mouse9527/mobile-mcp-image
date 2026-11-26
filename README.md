@@ -91,6 +91,15 @@ mobile-mcp itself is unchanged; with the variable unset nothing changes.
 - **Extra tools** in `tools/list`: `lease_status`, `lease_hold` (`seconds`, keep the phone while waiting for the user,
   capped at `LEASE_HOLD_MAX_S`), `lease_release`. `LEASE_TOKENS=1` also adds `lease_acquire` and an optional `lease`
   argument on every tool, for callers that cannot be identified otherwise (off by default: it changes tool schemas).
+- **A hold across chat turns.** The holder is only as stable as the id that identifies it. If the client gets a new MCP
+  session id for every turn (a chat turn = a new client process), a `lease_hold` made to wait for the user is held by a
+  session that no longer exists: the next turn is "someone else", cannot use the phone until the hold ends (at most
+  `LEASE_HOLD_MAX_S`) and cannot release it. The proper fix is an id that is stable across turns (`x-phone-holder`, set
+  per chat in the client's MCP config). Meanwhile: the busy / `lease_status` texts say when the holder is a `lease_hold`
+  and for how long; `lease_release` answers "not yours, unchanged" instead of "released" when the caller is not the holder
+  (and "already free" when nobody holds); `lease_release` with `force=true` ends **a hold** left by someone else (for the
+  user's explicit "clean it up" — never a caller that is simply working; those expire after `LEASE_IDLE_S`). A forced
+  release is logged as `lease_force_released` (hashed holder and hashed caller).
 - **Logs**: one JSON line per event on stderr (`"src":"lease"`): time, event, a sha256 prefix of the holder, how it was
   identified, tool name, wait time. Never arguments, results or raw holder ids.
 
@@ -141,7 +150,9 @@ mobile-mcp itself is unchanged; with the variable unset nothing changes.
 `.github/workflows/image.yml`: build linux/amd64 → `audit.sh` (no adb keys, credentials or `.git` in the image;
 file list and hashes uploaded as an artifact) → `smoke.sh` (refuses to start without a token, 401 without token,
 33 tools, adb ≥ 37, uid 1000, no shell, telemetry off; lease gateway with `PHONE_LEASE=1`: queueing, release, FIFO,
-hold, holder identity, first-call probation — `smoke/lease_test.py`) → push to ghcr from `main` only.
+hold, holder identity, first-call probation, honest release / forced release of a hold — `smoke/lease_test.py`) → push to
+ghcr from `main` only. The lease test also runs without docker or a phone: `smoke/run_lease_local.sh` (gateway.js against
+`smoke/fake_upstream.js`).
 
 ## License
 
