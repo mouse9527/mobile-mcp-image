@@ -139,7 +139,7 @@ client of the phone MCP gets it without installing anything else. Source: `guide
 
 - `PHONE_WAKE=1`: before a tool that needs the screen, the gateway checks `dumpsys power` (at most every `WAKE_CHECK_S`,
   default 15 s, also refreshed by every successful call). If the screen is not `Awake`: `KEYCODE_WAKEUP` (never POWER,
-  which toggles), `wm dismiss-keyguard` (for phones without a lock-screen password), wait `WAKE_SETTLE_MS` (800), check
+  which toggles), `wm dismiss-keyguard` (only dismisses a keyguard that asks for no credential; a no-op otherwise), wait `WAKE_SETTLE_MS` (800), check
   again; still off → a clear tool error, mobile-mcp is not called. A read-only call (elements, foreground app,
   screenshot) that still finds no UI hierarchy gets one recovery round (screen on: VOLUME_UP + VOLUME_DOWN, which ends
   MIUI's pocket mode; screen off: WAKEUP again) and one retry, then a clear error. Uses the adb server of the container.

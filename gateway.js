@@ -50,7 +50,8 @@ const GUIDE_DIR = process.env.GUIDE_DIR || path.join(__dirname, "guide");
 const GUIDE_TTL = env("GUIDE_TTL_S", 1800) * 1000;
 
 // guide/core.md = what every holder gets; every other <name>.md is a topic (app-<id>.md -> "app:<id>")
-const GUIDE_VARS = { LEASE_IDLE_S: IDLE / 1000, LEASE_HOLD_MAX_S: HOLD_MAX / 1000, LEASE_WAIT_S: WAIT / 1000 };
+const GUIDE_VARS = { LEASE_IDLE_S: IDLE / 1000, LEASE_HOLD_MAX_S: HOLD_MAX / 1000, LEASE_WAIT_S: WAIT / 1000,
+	LEASE_SESSION_FIRST_IDLE_S: FIRST_IDLE / 1000 };
 function loadGuide(dir) {
 	let files;
 	try { files = fs.readdirSync(dir).filter((f) => /^[a-z0-9-]+\.md$/.test(f)).sort(); } catch { return null; }

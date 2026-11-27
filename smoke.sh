@@ -78,6 +78,7 @@ echo "ok: no shell"
 docker exec "$NAME" /nodejs/bin/node -e 'process.exit(process.env.MOBILEMCP_DISABLE_TELEMETRY==="1"?0:1)' || fail "telemetry not disabled"
 echo "ok: telemetry disabled"
 # usage guide content (guide/*.md): titles, no bare lease numbers, known placeholders only
+python3 "$(dirname "$0")/smoke/guide_check.py" --self-test || fail "guide check self-test"
 python3 "$(dirname "$0")/smoke/guide_check.py" "$(dirname "$0")/guide" || fail "guide content"
 echo "ok: guide content"
 
