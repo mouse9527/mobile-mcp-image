@@ -6,9 +6,12 @@ name: image
 
 on:
   push:
-    paths-ignore:
-      - "**.md"
-      - "LICENSE"
+    # docs alone do not build; guide/*.md is served by the gateway, so it does
+    paths:
+      - "**"
+      - "!**.md"
+      - "!LICENSE"
+      - "guide/**"
   pull_request:
   workflow_dispatch:
 

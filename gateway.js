@@ -19,10 +19,17 @@
 // callers that are not waiting are skipped, so a finished hold never parks the phone for someone who left. lease_hold(seconds) keeps it while waiting for the user (<= LEASE_HOLD_MAX_S);
 // lease_release ends it. State is in memory: a restart frees the phone.
 //
+// Usage guide (guide/*.md, shipped in the image; GUIDE_DIR overrides): phone_guide(topic?) returns the core guide or one
+// topic. A holder's first phone call (again after GUIDE_TTL_S) gets the core guide appended to its result, unless it read
+// it with phone_guide() within that time; never blocks. Numbers in the guide are {{placeholders}} filled from the lease
+// settings below, so they are written in one place only.
+//
 // Logs (stderr, JSON lines): time, event, holder hash, via, tool, wait ms. Never arguments, results or raw ids.
 "use strict";
 const http = require("node:http");
 const crypto = require("node:crypto");
+const fs = require("node:fs");
+const path = require("node:path");
 const screen = require("./screen.js");
 
 const env = (k, d) => Number(process.env[k] || d);
@@ -32,13 +39,55 @@ const IDLE = env("LEASE_IDLE_S", 120) * 1000;
 const WAIT = env("LEASE_WAIT_S", 45) * 1000;
 const TICKET = env("LEASE_TICKET_S", 90) * 1000;
 const GRACE = env("LEASE_GRACE_S", 30) * 1000;
-const HOLD_MAX = env("LEASE_HOLD_MAX_S", 600) * 1000;
+const HOLD_MAX = env("LEASE_HOLD_MAX_S", 120) * 1000;
 const SESSION_TTL = env("LEASE_SESSION_MAP_TTL_S", 3600) * 1000;
 // a client session seen for the first time may be a caller that opens a new session per call (a script, or OWUI
 // without the chat id header): its lease is short until a second call shows the session persists
 const FIRST_IDLE = env("LEASE_SESSION_FIRST_IDLE_S", 30) * 1000;
 // level 4 (lease_acquire + optional `lease` argument on every tool) changes the tool schemas: off unless asked for
 const TOKENS = process.env.LEASE_TOKENS === "1";
+const GUIDE_DIR = process.env.GUIDE_DIR || path.join(__dirname, "guide");
+const GUIDE_TTL = env("GUIDE_TTL_S", 1800) * 1000;
+
+// guide/core.md = what every holder gets; every other <name>.md is a topic (app-<id>.md -> "app:<id>")
+const GUIDE_VARS = { LEASE_IDLE_S: IDLE / 1000, LEASE_HOLD_MAX_S: HOLD_MAX / 1000, LEASE_WAIT_S: WAIT / 1000 };
+function loadGuide(dir) {
+	let files;
+	try { files = fs.readdirSync(dir).filter((f) => /^[a-z0-9-]+\.md$/.test(f)).sort(); } catch { return null; }
+	const topics = new Map(); // topic -> {title, short, text}
+	for (const f of files) {
+		const text = fs.readFileSync(path.join(dir, f), "utf8")
+			.replace(/\{\{(\w+)\}\}/g, (m, k) => (k in GUIDE_VARS ? String(GUIDE_VARS[k]) : m)).trim();
+		const base = f.slice(0, -3);
+		const title = ((text.match(/^# (.+)$/m) || [])[1] || base).trim();
+		topics.set(base.startsWith("app-") ? "app:" + base.slice(4) : base, { title, short: title.split(/[（(]/)[0].trim(), text });
+	}
+	return topics.has("core") ? topics : null;
+}
+const GUIDE = loadGuide(GUIDE_DIR);
+const GUIDE_TOPICS = GUIDE ? [...GUIDE.keys()].filter((t) => t !== "core") : [];
+const GUIDE_INDEX = GUIDE_TOPICS.map((t) => `- ${t}：${GUIDE.get(t).title}`).join("\n");
+
+// topic: empty / "core" = the core guide; else a topic key ("captcha", "app:taobao"), case-insensitive, with or
+// without "app:", or an app's name as in its title ("淘宝")
+function findTopic(topic) {
+	const t = String(topic || "").trim().toLowerCase();
+	if (!t || t === "core") return "core";
+	const bare = t.replace(/^app[:：]\s*/, "");
+	for (const k of [t, "app:" + bare, bare]) if (GUIDE.has(k)) return k;
+	return GUIDE_TOPICS.find((k) => GUIDE.get(k).short.toLowerCase() === bare) || null;
+}
+function guideText(topic) {
+	if (!GUIDE) return { text: `手机使用说明没有加载（${GUIDE_DIR} 里没有 core.md）。按一般常识谨慎操作，不下单、不付款。`, isError: true };
+	const k = findTopic(topic);
+	if (!k) return { text: `没有这一部分：${String(topic)}。可用的 topic：\n${GUIDE_INDEX}`, isError: true };
+	if (k === "core") return { key: k, text: `${GUIDE.get("core").text}\n\n## 按需再读：phone_guide(topic=…)\n\n${GUIDE_INDEX}` };
+	return { key: k, text: `${GUIDE.get(k).text}\n\n---\n核心说明：phone_guide()；其它部分：${GUIDE_TOPICS.join(" / ")}` };
+}
+const GUIDE_APPENDIX = GUIDE ? "\n\n======== 手机使用说明（核心）：本会话第一次调用手机工具时附上，先读完再继续；" +
+	"之后可用 phone_guide 重读，某一部分用 phone_guide(topic=…) ========\n\n" + guideText("").text : null;
+const guideSeen = new Map(); // holder id -> when it last got the core guide
+const needsGuide = (who) => !!GUIDE && !who.transient && now() - (guideSeen.get(who.id) || 0) > GUIDE_TTL;
 
 const LEASE_PARAM = {
 	type: "string",
@@ -49,15 +98,21 @@ const LEASE_TOOLS = [
 		inputSchema: { type: "object", properties: {} } },
 	{ name: "lease_acquire", description: "显式占用手机并拿到租约号。只有在手机工具提示「无法识别你的会话」时才需要：之后每次调用手机工具都把租约号填进 lease 参数。",
 		inputSchema: { type: "object", properties: {} } },
-	{ name: "lease_hold", description: "等用户操作（扫码、看验证码、回复）时为当前任务保留手机，最多 600 秒；用户回来后照常继续调用手机工具。",
-		inputSchema: { type: "object", properties: { seconds: { type: "number", description: "保留秒数，1–600" },
+	{ name: "lease_hold", description: `同一轮里等用户在手机上点一下时，为当前任务保留手机，最多 ${HOLD_MAX / 1000} 秒。` +
+		"不要用它跨轮保留：要等用户扫码、看验证码、回复你时，先 lease_release 再回复，下一轮重新拿。",
+		inputSchema: { type: "object", properties: { seconds: { type: "number", description: `保留秒数，1–${HOLD_MAX / 1000}` },
 			lease: LEASE_PARAM }, required: ["seconds"] } },
-	{ name: "lease_release", description: "当前任务不再需要手机时立刻释放，让排队的任务继续。只能释放自己持有的；" +
+	{ name: "lease_release", description: "回复用户之前调用（做完、失败、放弃或要等用户时都一样），立刻释放手机，让排队的任务继续。只能释放自己持有的；" +
 		"手机被别人的 lease_hold 保留占着（例如上一轮对话留下的）时，只有用户明确要求清理才传 force=true 强制结束那个保留，" +
 		"正在操作手机的人不会被强制释放。",
 		inputSchema: { type: "object", properties: { force: { type: "boolean",
 			description: "仅用户明确要求清理时才填 true：强制结束别人留下的 lease_hold 保留（不影响正在操作的人）" }, lease: LEASE_PARAM } } },
 ];
+
+const GUIDE_TOOL = { name: "phone_guide", description: "手机使用说明：硬规则、调用顺序、占用规则、各 App 怎么操作。操作手机之前先调用一次" +
+	"（不填 topic = 核心说明），需要时再读某一部分。不操作手机，也不占用手机。",
+	inputSchema: { type: "object", properties: { topic: { type: "string", description: "不填 = 核心说明。可选：" +
+		GUIDE_TOPICS.map((t) => `${t}（${GUIDE.get(t).short}）`).join(" / ") } } } };
 
 let holder = null; // {id, via, since, expiresAt, inflight, transient}
 const queue = []; // [{id, ticketUntil, waiters: [fn]}]
@@ -111,6 +166,7 @@ setInterval(tick, 250).unref();
 setInterval(() => {
 	for (const [k, v] of sessions) if (now() - v.at > SESSION_TTL) sessions.delete(k);
 	if (seenClients.size > 10000) seenClients.clear();
+	for (const [k, t] of guideSeen) if (now() - t > GUIDE_TTL) guideSeen.delete(k);
 }, 60000).unref();
 
 const position = (who) => {
@@ -209,7 +265,7 @@ function patchTools(data, ctype) {
 				t.inputSchema = t.inputSchema || { type: "object", properties: {} };
 				t.inputSchema.properties = { ...(t.inputSchema.properties || {}), lease: LEASE_PARAM };
 			}
-			msg.result.tools.push(...LEASE_TOOLS.filter((t) => TOKENS || t.name !== "lease_acquire"));
+			msg.result.tools.push(...(GUIDE ? [GUIDE_TOOL] : []), ...LEASE_TOOLS.filter((t) => TOKENS || t.name !== "lease_acquire"));
 		}
 		return msg;
 	};
@@ -226,6 +282,12 @@ async function onToolCall(req, res, msg) {
 	// a stale / made-up token only matters when nothing else identifies the caller
 	const badToken = TOKENS && who.via === "anon" && typeof args.lease === "string" && args.lease !== "";
 	delete args.lease; // never reaches mobile-mcp
+	if (tool === "phone_guide") { // no phone, no lease
+		const g = guideText(args.topic);
+		if (g.key === "core") guideSeen.set(who.id, now());
+		if (!who.transient) log("guide", who, { topic: g.key || "unknown" });
+		return sendJson(res, toolResult(msg.id, g.text, !!g.isError));
+	}
 	if (tool === "lease_status") {
 		tick();
 		const text = !holder ? `手机空闲（排队 ${queue.length}）。你被识别为：${who.via}。`
@@ -299,7 +361,11 @@ async function onToolCall(req, res, msg) {
 	const waited = now() - t0;
 	holder.inflight++;
 	try {
-		await callPhone(req, res, msg, tool, args, (event, extra) => log(event, who, extra));
+		const appendix = needsGuide(who) ? GUIDE_APPENDIX : null;
+		if (await callPhone(req, res, msg, tool, args, (event, extra) => log(event, who, extra), appendix)) {
+			guideSeen.set(who.id, now());
+			log("guide_appended", who, { tool });
+		}
 	} finally {
 		if (holder && holder.id === who.id) {
 			holder.inflight--;
@@ -341,12 +407,13 @@ const rewrap = (data, msg) => (/^data: /m.test(data) ? data.replace(/^data: .*$/
 const resultText = (msg) => ((msg && msg.result && msg.result.content) || []).filter((c) => c.type === "text").map((c) => c.text).join("\n");
 
 // a phone tool call: screen on first (PHONE_WAKE), one recovery + retry when a read-only call finds no UI hierarchy,
-// element lists trimmed (ELEMENTS_TRIM). With both switches off this is a plain pass-through.
-async function callPhone(req, res, msg, tool, args, log) {
+// element lists trimmed (ELEMENTS_TRIM), `appendix` (the core guide) added after the result. With both switches off and
+// no appendix this is a plain pass-through. Returns true when the appendix went out.
+async function callPhone(req, res, msg, tool, args, log, appendix) {
 	const body = JSON.stringify({ ...msg, params: { ...msg.params, arguments: args } });
-	if (!screen.WAKE && !screen.TRIM) return forward(req, body, res);
+	if (!screen.WAKE && !screen.TRIM && !appendix) { await forward(req, body, res); return false; }
 	const awake = await screen.ensureAwake(tool, log);
-	if (!awake.ok) return sendJson(res, toolResult(msg.id, screen.WAKE_FAILED(awake.detail), true));
+	if (!awake.ok) { sendJson(res, toolResult(msg.id, screen.WAKE_FAILED(awake.detail), true)); return false; }
 	let r = await upstream(req, body);
 	let out = unwrap(r.data);
 	const failed = (o) => !o || o.error || (o.result && o.result.isError);
@@ -356,7 +423,8 @@ async function callPhone(req, res, msg, tool, args, log) {
 		out = unwrap(r.data);
 		if (failed(out)) {
 			log("screen_still_failing", { tool });
-			return sendJson(res, toolResult(msg.id, screen.WAKE_FAILED("点亮后仍读不到界面（可能被遮挡，或是不允许读取的安全页面）"), true));
+			sendJson(res, toolResult(msg.id, screen.WAKE_FAILED("点亮后仍读不到界面（可能被遮挡，或是不允许读取的安全页面）"), true));
+			return false;
 		}
 	}
 	if (out && out.result && !out.result.isError) {
@@ -364,10 +432,13 @@ async function callPhone(req, res, msg, tool, args, log) {
 			for (const c of out.result.content || []) if (c.type === "text") c.text = screen.trimElements(c.text);
 		}
 	}
+	const appended = !!(appendix && out && out.result);
+	if (appended) out.result.content = [...(out.result.content || []), { type: "text", text: appendix }];
 	const h = { ...r.headers };
 	delete h["content-length"];
 	res.writeHead(r.status, h);
 	res.end(out ? rewrap(r.data, out) : r.data);
+	return appended;
 }
 
 http.createServer((req, res) => {
@@ -392,4 +463,5 @@ http.createServer((req, res) => {
 	});
 }).listen(LISTEN, process.env.LEASE_HOST || "0.0.0.0", () =>
 	log("listening", null, { port: LISTEN, upstream: UPSTREAM.href, idle_s: IDLE / 1000, wait_s: WAIT / 1000,
-		first_idle_s: FIRST_IDLE / 1000, tokens: TOKENS }));
+		first_idle_s: FIRST_IDLE / 1000, hold_max_s: HOLD_MAX / 1000, tokens: TOKENS,
+		guide: GUIDE ? GUIDE.size : "missing", guide_ttl_s: GUIDE_TTL / 1000 }));

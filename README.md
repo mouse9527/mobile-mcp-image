@@ -88,8 +88,9 @@ mobile-mcp itself is unchanged; with the variable unset nothing changes.
   seen for the first time only gets `LEASE_SESSION_FIRST_IDLE_S`, so callers that open a new session per call do not
   wait behind themselves. LiteLLM: list `mcp-session-id`, `x-openwebui-chat-id`, `x-phone-holder` in the server's
   `extra_headers`.
-- **Extra tools** in `tools/list`: `lease_status`, `lease_hold` (`seconds`, keep the phone while waiting for the user,
-  capped at `LEASE_HOLD_MAX_S`), `lease_release`. `LEASE_TOKENS=1` also adds `lease_acquire` and an optional `lease`
+- **Extra tools** in `tools/list`: `phone_guide` (see below), `lease_status`, `lease_hold` (`seconds`, keep the phone
+  while waiting for the user to tap something within the same turn, capped at `LEASE_HOLD_MAX_S`; the tool description
+  is built from that value), `lease_release` (call it before replying). `LEASE_TOKENS=1` also adds `lease_acquire` and an optional `lease`
   argument on every tool, for callers that cannot be identified otherwise (off by default: it changes tool schemas).
 - **A hold across chat turns.** The holder is only as stable as the id that identifies it. If the client gets a new MCP
   session id for every turn (a chat turn = a new client process), a `lease_hold` made to wait for the user is held by a
@@ -110,9 +111,29 @@ mobile-mcp itself is unchanged; with the variable unset nothing changes.
 | `LEASE_WAIT_S` | `45` |
 | `LEASE_TICKET_S` | `90` |
 | `LEASE_GRACE_S` | `30` |
-| `LEASE_HOLD_MAX_S` | `600` |
+| `LEASE_HOLD_MAX_S` | `120` |
 | `LEASE_TOKENS` | unset (off) |
 | `LEASE_INNER_LISTEN` | `127.0.0.1:8932` |
+| `GUIDE_DIR` | `/app/guide` (the guide in the image) |
+| `GUIDE_TTL_S` | `1800` |
+
+## Usage guide (with the lease gateway)
+
+The phone's usage guide (hard rules, call order, lease rules, how to use each app) ships with the gateway, so every
+client of the phone MCP gets it without installing anything else. Source: `guide/*.md` (Chinese, for the model).
+
+- `phone_guide(topic?)`: no topic = `guide/core.md` plus the list of topics; `topic` = another file's name
+  (`captcha`, `input`, `screen`, `speed`), `app:<id>` for `guide/app-<id>.md`, or an app's name as in its title (`淘宝`).
+  Unknown topic = tool error with the list. Needs no lease and never waits for the phone.
+- **First call per holder**: when a holder (see above) calls a phone tool and has not had the core guide within
+  `GUIDE_TTL_S`, the call runs as usual and the core guide is appended to its result as an extra text item (log event
+  `guide_appended`). Reading `phone_guide()` first counts. Callers identified by nothing (`anon`) never get it appended.
+  State is in memory.
+- **Numbers live in one place**: the guide writes `{{LEASE_IDLE_S}}`, `{{LEASE_HOLD_MAX_S}}`, `{{LEASE_WAIT_S}}`, filled
+  from the settings at start-up; `smoke/guide_check.py` (CI) refuses a bare 120 / 600 and unknown placeholders.
+- **Changing the guide**: edit `guide/`, open a PR (run `scripts/preflight.sh` before pushing: this repository is
+  public) → merged to `main` builds and pushes a new image (guide changes trigger the build) → deploy that image.
+  `GUIDE_DIR` can point at a mounted directory instead, to change the text without a new image.
 
 ## Screen helpers (optional, with the lease gateway)
 
@@ -150,7 +171,9 @@ mobile-mcp itself is unchanged; with the variable unset nothing changes.
 `.github/workflows/image.yml`: build linux/amd64 → `audit.sh` (no adb keys, credentials or `.git` in the image;
 file list and hashes uploaded as an artifact) → `smoke.sh` (refuses to start without a token, 401 without token,
 33 tools, adb ≥ 37, uid 1000, no shell, telemetry off; lease gateway with `PHONE_LEASE=1`: queueing, release, FIFO,
-hold, holder identity, first-call probation, honest release / forced release of a hold — `smoke/lease_test.py`) → push to
+hold, holder identity, first-call probation, honest release / forced release of a hold, `phone_guide` and the
+first-call guide — `smoke/lease_test.py`; guide content — `smoke/guide_check.py`; defaults: hold cap 120 s, guide
+loaded from the image) → push to
 ghcr from `main` only. The lease test also runs without docker or a phone: `smoke/run_lease_local.sh` (gateway.js against
 `smoke/fake_upstream.js`).
 

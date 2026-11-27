@@ -62,8 +62,8 @@ def settle():
 
 tools = rpc('tools/list', {})['result']['tools']
 names = [t['name'] for t in tools]
-check('tools/list = 33 mobile-mcp tools + lease_status / lease_hold / lease_release',
-      len(names) == 36 and names[-3:] == ['lease_status', 'lease_hold', 'lease_release'], str(len(names)))
+check('tools/list = 33 mobile-mcp tools + phone_guide / lease_status / lease_hold / lease_release',
+      len(names) == 37 and names[-4:] == ['phone_guide', 'lease_status', 'lease_hold', 'lease_release'], str(len(names)))
 check('tokens off: no lease_acquire, no extra `lease` argument on phone tools',
       'lease_acquire' not in names and not any('lease' in (t.get('inputSchema') or {}).get('properties', {}) for t in tools[:33]))
 
@@ -185,6 +185,40 @@ call('lease_release', holder='W')
 settle()
 _, txt_free, _ = call('lease_release', holder='Z')
 check('release when the phone is free says so', '本来就是空闲' in txt_free, txt_free[:40])
+
+# usage guide (M-332): phone_guide(topic?) and the core guide appended to a holder's first phone call
+GUIDE = '手机使用说明（核心）'
+gt = next(t for t in tools if t['name'] == 'phone_guide')
+lh = next(t for t in tools if t['name'] == 'lease_hold')
+check('lease_hold description and limit come from LEASE_HOLD_MAX_S (8 here), nothing hard-coded',
+      '最多 8 秒' in lh['description'] and '1–8' in json.dumps(lh, ensure_ascii=False) and '600' not in json.dumps(lh))
+tdesc = gt['inputSchema']['properties']['topic']['description']
+check('phone_guide lists its topics', all(k in tdesc for k in ('captcha', 'input', 'screen', 'speed', 'app:taobao', 'app:dianping')), tdesc[:80])
+settle()
+core = call('phone_guide', holder='G0')[1]
+check('phone_guide() = core guide with placeholders filled (idle 3 s, hold 8 s) and the topic index',
+      GUIDE in core and '{{' not in core and '约 3 秒' in core and '最多 8 秒' in core and 'app:taobao' in core, core[:40])
+okg, first, _ = call(holder='G1')
+_, second, _ = call(holder='G1')
+check('a holder\'s first phone call gets the core guide appended (not blocked); the next call does not',
+      okg and GUIDE in first and GUIDE not in second, f'{len(first)} / {len(second)} chars')
+call('lease_release', holder='G1')
+call('phone_guide', holder='G2')
+okr, after_read, _ = call(holder='G2')
+check('a holder that read phone_guide() first gets no appendix', okr and GUIDE not in after_read)
+t1 = call('phone_guide', {'topic': 'app:taobao'}, holder='G2')[1]
+t2 = call('phone_guide', {'topic': '淘宝'}, holder='G2')[1]
+t3 = call('phone_guide', {'topic': 'captcha'}, holder='G2')[1]
+check('phone_guide(topic): app:<id>, an app name, a topic', t1.startswith('# 淘宝') and t2 == t1 and t3.startswith('# 验证码'))
+bad = rpc('tools/call', {'name': 'phone_guide', 'arguments': {'topic': 'no-such-topic'}}, holder='G2').get('result') or {}
+btxt = ''.join(c.get('text', '') for c in bad.get('content', []))
+check('unknown topic: tool error listing the topics', bad.get('isError') is True and 'app:taobao' in btxt, btxt[:40])
+# G2 holds the phone now: phone_guide neither waits for it nor takes it
+okq, qtxt, sq = call('phone_guide', {'topic': 'input'}, holder='G3')
+st3 = call('lease_status', holder='G3')[1]
+check('phone_guide needs no lease: answers at once while another holder has the phone, takes nothing',
+      okq and qtxt.startswith('# 输入文字') and sq < 1.0 and '你持有手机' not in st3, f'{sq:.1f}s')
+call('lease_release', holder='G2')
 
 print('lease smoke %d/%d' % (sum(RES), len(RES)))
 sys.exit(0 if all(RES) else 1)

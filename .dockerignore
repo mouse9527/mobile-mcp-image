@@ -2,6 +2,7 @@
 .github
 *.md
 !NOTICE.md
+!guide/*.md
 smoke.sh
 audit.sh
 smoke

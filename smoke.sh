@@ -77,6 +77,10 @@ echo "ok: no shell"
 
 docker exec "$NAME" /nodejs/bin/node -e 'process.exit(process.env.MOBILEMCP_DISABLE_TELEMETRY==="1"?0:1)' || fail "telemetry not disabled"
 echo "ok: telemetry disabled"
+# usage guide content (guide/*.md): titles, no bare lease numbers, known placeholders only
+python3 "$(dirname "$0")/smoke/guide_check.py" "$(dirname "$0")/guide" || fail "guide content"
+echo "ok: guide content"
+
 # lease gateway (PHONE_LEASE=1, k8s#87): one holder at a time across MCP sessions; short timings for the test
 LPORT=$((PORT + 2))
 docker run -d --name "$NAME-lease" -p "127.0.0.1:${LPORT}:8931" -e MOBILEMCP_AUTH_DISABLED=1 -e PHONE_LEASE=1 \
@@ -148,6 +152,14 @@ post({'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {'name': 'mob
 PY
 grep -q '"wake":"Awake"' "$WDIR/phone.json" || fail "an action right after the screen went off was not woken"
 echo "ok: actions are always checked (screen switched off right after a check gets woken before a tap)"
+# defaults (no LEASE_* set here): lease_hold capped at 120 s, phone_guide served from the guide in the image
+d=$(curl -s -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' "http://127.0.0.1:${WPORT}/mcp" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | sed -n 's/^data: //p' \
+  | python3 -c 'import json,sys; t={x["name"]:x for x in json.load(sys.stdin)["result"]["tools"]}; print(t["lease_hold"]["description"]); print("guide:" + str("phone_guide" in t))')
+echo "$d" | grep -q "最多 120 秒" || fail "LEASE_HOLD_MAX_S default is not 120 s: $d"
+echo "$d" | grep -q '^guide:True$' || fail "phone_guide missing (guide not in the image?)"
+docker logs "$NAME-wake" 2>&1 | grep '"event":"listening"' | grep -qE '"guide":[1-9]' || fail "gateway did not load the guide"
+echo "ok: defaults: lease_hold up to 120 s, phone_guide with the guide from the image"
 docker rm -f "$NAME-wake" >/dev/null; rm -rf "$WDIR"
 
 echo "SMOKE PASS"
