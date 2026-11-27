@@ -68,7 +68,7 @@ async function ensureAwake(tool, log) {
 		return { ok: true, woke: false }; // let the call run; mobile-mcp reports its own error
 	}
 	await shell("input", "keyevent", "KEYCODE_WAKEUP");
-	await shell("wm", "dismiss-keyguard"); // the phones have no lock-screen password; no-op without a keyguard
+	await shell("wm", "dismiss-keyguard"); // only dismisses a keyguard that asks for no credential; a no-op otherwise
 	await new Promise((r) => setTimeout(r, SETTLE));
 	const after = await wakefulness();
 	log("screen_woken", { tool, from: w, to: after });
