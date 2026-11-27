@@ -136,12 +136,32 @@ mobile-mcp itself is unchanged; with the variable unset nothing changes.
   download the zip, check its sha1 against the manifest, then record its sha256.
 - **Base images**: update the digests in `NODE_IMAGE` / `RUNTIME_IMAGE`; keep both on the same Debian release.
 
+## Personal-data check (this repository is public)
+
+Nothing in this repository may carry personal data (phone numbers, addresses, places, statements about the phone's
+security settings or whereabouts). The rules and scripts are copied from `mouse9527/skills`; keep them in step.
+
+```bash
+git config --worktree core.hooksPath scripts/hooks   # once per checkout (plain `git config` if not a worktree)
+scripts/preflight.sh                                  # before every push: clean tree -> public rules -> private scan
+```
+
+- `scripts/validate.py`: public rules (`policy/rules.py`) on every file; symlinks and binary files are refused. Run by CI.
+- `scripts/pii_scan.py` (via `scripts/preflight.sh`): the final tree and every commit in `origin/main..HEAD` (identity,
+  message, every file version it adds) with the public rules **and a private term list kept outside every repository**
+  (`$PII_TERMS`, else `$SKILLS_PII_TERMS`, default `~/.config/assistant-config/pii-terms.txt`, mode 0600). A missing,
+  empty or group/world-readable list is a failure. Output names commit / file / line / kind only, never the match.
+- `scripts/hooks/pre-push`: refuses a push unless preflight passed for exactly that commit.
+- **CI green does not mean the private check passed**: CI never has the term list.
+
 ## CI
 
 `.github/workflows/image.yml`: build linux/amd64 → `audit.sh` (no adb keys, credentials or `.git` in the image;
 file list and hashes uploaded as an artifact) → `smoke.sh` (refuses to start without a token, 401 without token,
 33 tools, adb ≥ 37, uid 1000, no shell, telemetry off; lease gateway with `PHONE_LEASE=1`: queueing, release, FIFO,
 hold, holder identity, first-call probation — `smoke/lease_test.py`) → push to ghcr from `main` only.
+
+`.github/workflows/validate.yml`: `scripts/validate.py` (public personal-data rules only; see above).
 
 ## License
 
