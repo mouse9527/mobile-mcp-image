@@ -31,6 +31,8 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund --update-notifier=fa
  && test -x "node_modules/@mobilenext/mobilecli-linux-$(dpkg --print-architecture)/mobilecli-linux-$(dpkg --print-architecture)" \
  && ls node_modules/@mobilenext
 COPY entrypoint.js gateway.js screen.js ./
+# usage guide served by the lease gateway (phone_guide); GUIDE_DIR can point elsewhere
+COPY guide ./guide
 
 FROM ${RUNTIME_IMAGE}
 COPY --from=build /opt/platform-tools /opt/platform-tools
