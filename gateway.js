@@ -331,7 +331,9 @@ async function onToolCall(req, res, msg) {
 				if (holder.via === "token") tokens.delete(holder.id.slice(6));
 				holder = null;
 				tick();
-				return sendJson(res, toolResult(msg.id, "已强制结束别人留下的保留，手机现在空闲。"));
+				// tick() may already have handed the phone to a caller waiting in the queue: do not claim it is free
+				return sendJson(res, toolResult(msg.id, "已强制结束别人留下的保留。" +
+					(holder ? "手机已交给排队在前面的任务，你要用就照常调用手机工具排队。" : "")));
 			}
 			return sendJson(res, toolResult(msg.id, "不能强制释放：对方不是在保留，而是正在操作手机，最晚约 " +
 				`${Math.max(0, Math.round((holder.expiresAt - now()) / 1000))} 秒后会自己释放。`, true));

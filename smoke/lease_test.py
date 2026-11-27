@@ -182,6 +182,17 @@ check('force=true does not kick a holder that is just working (it expires by its
       '不能强制' in txt_nf and okw and not okx, txt_nf[:60])
 call('lease_release', holder='W')
 
+# force-release while someone is waiting: the phone goes to the waiting caller at once, so the reply must not say "free"
+settle()
+call('lease_hold', {'seconds': 8}, holder='HF')
+thw, ow = bg(call, holder='QW')               # waits in its call (up to 2 s)
+time.sleep(0.3)
+_, txt_fw, _ = call('lease_release', {'force': True}, holder='XF')
+thw.join()
+check('force-release with a caller waiting: it gets the phone, the reply says so and does not claim the phone is free',
+      ow['r'][0] and '交给排队' in txt_fw and '空闲' not in txt_fw, txt_fw[:50])
+call('lease_release', holder='QW')
+
 settle()
 _, txt_free, _ = call('lease_release', holder='Z')
 check('release when the phone is free says so', '本来就是空闲' in txt_free, txt_free[:40])
