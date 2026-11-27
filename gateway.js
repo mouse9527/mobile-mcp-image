@@ -52,8 +52,11 @@ const LEASE_TOOLS = [
 	{ name: "lease_hold", description: "等用户操作（扫码、看验证码、回复）时为当前任务保留手机，最多 600 秒；用户回来后照常继续调用手机工具。",
 		inputSchema: { type: "object", properties: { seconds: { type: "number", description: "保留秒数，1–600" },
 			lease: LEASE_PARAM }, required: ["seconds"] } },
-	{ name: "lease_release", description: "当前任务不再需要手机时立刻释放，让排队的任务继续。",
-		inputSchema: { type: "object", properties: { lease: LEASE_PARAM } } },
+	{ name: "lease_release", description: "当前任务不再需要手机时立刻释放，让排队的任务继续。只能释放自己持有的；" +
+		"手机被别人的 lease_hold 保留占着（例如上一轮对话留下的）时，只有用户明确要求清理才传 force=true 强制结束那个保留，" +
+		"正在操作手机的人不会被强制释放。",
+		inputSchema: { type: "object", properties: { force: { type: "boolean",
+			description: "仅用户明确要求清理时才填 true：强制结束别人留下的 lease_hold 保留（不影响正在操作的人）" }, lease: LEASE_PARAM } } },
 ];
 
 let holder = null; // {id, via, since, expiresAt, inflight, transient}
@@ -82,7 +85,7 @@ function resolveHolder(req, args) {
 function tick() {
 	const t = now();
 	if (holder && holder.inflight === 0 && t >= holder.expiresAt) {
-		if (!holder.transient) log("lease_expired", holder, { held_ms: t - holder.since });
+		if (!holder.transient) log("lease_expired", holder, { held_ms: t - holder.since, hold: !!holder.held });
 		if (holder.via === "token") tokens.delete(holder.id.slice(6));
 		holder = null;
 	}
@@ -139,10 +142,17 @@ function acquire(who, waitMs) {
 	});
 }
 
+// what the current holder is doing, for the busy / status / release texts: an explicit lease_hold (waiting for a user,
+// possibly left by an earlier turn of the SAME task under another client session id) or simply working
+const holderKind = () => (holder && holder.held
+	? `对方是用 lease_hold 保留的（在等用户操作，还剩约 ${Math.max(0, Math.round((holder.expiresAt - now()) / 1000))} 秒；` +
+		"如果是你上一轮对话留下的，换了一轮会话号就认不出你，只能等它到期，或由用户要求后用 lease_release 传 force=true 清理）。"
+	: "");
+
 function busyText(who) {
 	const busy = holder ? Math.round((now() - holder.since) / 1000) : 0;
 	const left = holder ? Math.max(0, Math.round((holder.expiresAt - now()) / 1000)) : 0;
-	return `手机正在被另一个任务使用（已占用 ${busy} 秒，若对方不再操作最晚约 ${left} 秒后释放）。` +
+	return `手机正在被另一个任务使用（已占用 ${busy} 秒，若对方不再操作最晚约 ${left} 秒后释放）。${holderKind()}` +
 		(who.transient ? "" : `你排在第 ${position(who)} 位；对方占着期间位置保留 ${TICKET / 1000} 秒，手机空出来时你若没有在等的调用就不再保留（先到先得）。`) +
 		"不要改用别的方式操作手机；稍后重试同一个操作，或先告诉用户手机正被占用、问要不要等。";
 }
@@ -219,7 +229,7 @@ async function onToolCall(req, res, msg) {
 	if (tool === "lease_status") {
 		tick();
 		const text = !holder ? `手机空闲（排队 ${queue.length}）。你被识别为：${who.via}。`
-			: holder.id === who.id ? `你持有手机，剩约 ${Math.max(0, Math.round((holder.expiresAt - now()) / 1000))} 秒（每次调用手机工具都会续期）。`
+			: holder.id === who.id ? `你持有手机${holder.held ? "（lease_hold 保留）" : ""}，剩约 ${Math.max(0, Math.round((holder.expiresAt - now()) / 1000))} 秒（每次调用手机工具都会续期）。`
 				: busyText(who);
 		return sendJson(res, toolResult(msg.id, text));
 	}
@@ -239,15 +249,32 @@ async function onToolCall(req, res, msg) {
 		return sendJson(res, toolResult(msg.id, `已占用手机。租约号：${token}。之后每次调用手机工具都在 lease 参数里填它；做完调用 lease_release。`));
 	}
 	if (tool === "lease_release") {
+		tick();
+		const i = queue.findIndex((q) => q.who.id === who.id);
+		if (i >= 0 && queue[i].waiters.length === 0) queue.splice(i, 1);
 		if (holder && holder.id === who.id) {
 			log("lease_released", who, { held_ms: now() - holder.since });
 			if (who.via === "token") tokens.delete(who.id.slice(6));
 			holder = null;
 			tick();
+			return sendJson(res, toolResult(msg.id, "已释放手机。"));
 		}
-		const i = queue.findIndex((q) => q.who.id === who.id);
-		if (i >= 0 && queue[i].waiters.length === 0) queue.splice(i, 1);
-		return sendJson(res, toolResult(msg.id, "已释放手机。"));
+		if (!holder) return sendJson(res, toolResult(msg.id, "手机本来就是空闲的，没有需要释放的。"));
+		// someone else holds it. Say so instead of "released": a new turn of the same task can carry another client session id
+		// and is then a stranger to its own earlier hold. `force` ends a HOLD only (a caller that is merely working expires by
+		// itself within LEASE_IDLE_S, and ending it would cut a task off in the middle of its steps).
+		if (args.force === true) {
+			if (holder.held && holder.inflight === 0) {
+				log("lease_force_released", holder, { by: hash(who.id), held_ms: now() - holder.since });
+				if (holder.via === "token") tokens.delete(holder.id.slice(6));
+				holder = null;
+				tick();
+				return sendJson(res, toolResult(msg.id, "已强制结束别人留下的保留，手机现在空闲。"));
+			}
+			return sendJson(res, toolResult(msg.id, "不能强制释放：对方不是在保留，而是正在操作手机，最晚约 " +
+				`${Math.max(0, Math.round((holder.expiresAt - now()) / 1000))} 秒后会自己释放。`, true));
+		}
+		return sendJson(res, toolResult(msg.id, "你当前没有持有手机，没有可释放的东西，对方的占用没有变化。" + holderKind(), true));
 	}
 	if (tool === "lease_hold") {
 		if (who.transient) return sendJson(res, toolResult(msg.id, "无法识别你的会话，先调用 lease_acquire 拿租约号。", true));
@@ -257,6 +284,7 @@ async function onToolCall(req, res, msg) {
 			return sendJson(res, toolResult(msg.id, busyText(who), true));
 		}
 		holder.expiresAt = Math.max(holder.expiresAt, now() + ms);
+		holder.held = true;
 		log("lease_hold", who, { seconds: ms / 1000 });
 		return sendJson(res, toolResult(msg.id, `已为当前任务保留手机 ${ms / 1000} 秒；期间别的任务会排队。用户回来后照常继续。`));
 	}

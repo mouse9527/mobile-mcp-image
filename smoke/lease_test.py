@@ -156,5 +156,35 @@ okc, _, sc = call(holder='H3')
 check('… and call at once (no 30 s grace parked for the absent caller)', okc and sc < 1.0, f'{sc:.1f}s')
 call('lease_release', holder='H3')
 
+# A hold left by an earlier turn: a chat turn can be a new client session, so the new turn is "someone else" and can neither
+# use nor release it. The release must not claim success, the busy text must say it is a hold, and `force` must end a HOLD
+# (never someone who is simply working). Without `force` nothing changes.
+settle()
+call('lease_hold', {'seconds': 8}, client_session='turn-1')
+okt2, txt_busy, _ = call(client_session='turn-2')
+check('busy text says the holder is a lease_hold and how long it lasts', not okt2 and 'lease_hold' in txt_busy and '保留' in txt_busy, txt_busy[:60])
+_, txt_rel, _ = call('lease_release', client_session='turn-2')
+still, _, _ = call(client_session='turn-2')
+check('release by a non-holder does not claim success and changes nothing',
+      '已释放手机' not in txt_rel and '没有持有' in txt_rel and not still, txt_rel[:60])
+_, txt_force, _ = call('lease_release', {'force': True}, client_session='turn-2')
+okf, _, sf = call(client_session='turn-2')
+check('release force=true ends someone else\'s hold at once', '强制' in txt_force and okf and sf < 1.0, f'{txt_force[:40]} {sf:.1f}s')
+call('lease_release', client_session='turn-2')
+
+settle()
+call(holder='W')
+call(holder='W')                                   # W is working, not holding
+_, txt_nf, _ = call('lease_release', {'force': True}, holder='X')
+okw, _, _ = call(holder='W')
+okx, _, _ = call(holder='X')
+check('force=true does not kick a holder that is just working (it expires by itself)',
+      '不能强制' in txt_nf and okw and not okx, txt_nf[:60])
+call('lease_release', holder='W')
+
+settle()
+_, txt_free, _ = call('lease_release', holder='Z')
+check('release when the phone is free says so', '本来就是空闲' in txt_free, txt_free[:40])
+
 print('lease smoke %d/%d' % (sum(RES), len(RES)))
 sys.exit(0 if all(RES) else 1)
