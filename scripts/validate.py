@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from policy import rules  # noqa: E402
 
 SKIP_DIRS = {'.git', '__pycache__', '.pytest_cache', 'node_modules', 'audit'}
-SKIP_FILES = {'.DS_Store'}
+SKIP_FILES = {'.DS_Store', '.git'}  # .git is a file in a git worktree
 
 
 def repo_files(root: Path) -> list[Path]:
