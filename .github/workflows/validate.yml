@@ -1,0 +1,26 @@
+# Public checks only. The private term list is NOT available here (and must never be): this job passing does not
+# mean the private personal-data check passed — that is scripts/preflight.sh, run before every push.
+name: validate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: repository rules (scripts/validate.py; generic personal-data rules)
+        run: python3 -I scripts/validate.py
+
+      - name: private check
+        run: echo "::notice::private personal-data term check does not run in CI (not a pass); see scripts/preflight.sh"

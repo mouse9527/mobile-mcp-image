@@ -5,7 +5,7 @@ The container image it builds also contains third-party software, unmodified, un
 
 ## mobile-next/mobile-mcp
 
-Source: https://github.com/mobile-next/mobile-mcp — npm `@mobilenext/mobile-mcp@1.0.12`
+Source: https://github.com/mobile-next/mobile-mcp — npm `@mobilenext/mobile-mcp`, version 1.0.12
 License: Apache License 2.0 (the full text ships in the image at `/app/node_modules/@mobilenext/mobile-mcp/LICENSE`).
 Its npm dependencies (including the `mobilecli` binary, `@mobilenext/mobilecli-linux-amd64`) are installed exactly as
 pinned in `package-lock.json`; each package's own license file ships with it under `/app/node_modules/`.
