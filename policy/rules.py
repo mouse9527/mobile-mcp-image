@@ -29,7 +29,9 @@ GENERIC = (
     ('device security statement', re.compile(
         r'(?:没有|没设置?|未设置?|不设|无|关闭了?|取消了?|去掉了?)\s*(?:锁屏|开机|解锁|屏幕)?\s*(?:密码|PIN|口令|锁屏)'
         r'|免密(?:登录|支付|解锁)?\s*(?:已|开|开启|打开)|(?:已|开启了?|打开了?)\s*免密'
-        r'|\bno\s+(?:screen[- ]?lock|passcode|lock[- ]?screen\s+password)\b', re.I)),
+        r'|\b(?:no|without)\s+(?:a\s+|any\s+)?(?:screen[- ]?lock|passcode|pin|lock[- ]?screen(?:\s+(?:password|passcode|pin))?)\b'
+        r'|\b(?:stays?|is|are|remains?|kept|left)\s+unlocked\b|\bpasswordless\b'
+        r'|\bnot\s+protected\s+by\s+(?:a\s+|any\s+)?(?:password|passcode|pin|screen[- ]?lock|lock[- ]?screen)\b', re.I)),
     # where the user's device sits / habits ("the phone stays at home")
     ('device whereabouts', re.compile(
         r'(?:手机|设备|电脑|平板|iPad|iPhone)[^。；\n]{0,6}(?:放在|留在|一直在|常在)\s*(?:家|公司|办公室|单位)')),
@@ -38,6 +40,8 @@ COORD_RE = re.compile(r'(-?\d{1,3}\.(\d{3,}))\s*[,，]\s*(-?\d{1,3}\.(\d{3,}))')
 
 # the only identity allowed on public commits (GitHub noreply; already public)
 COMMIT_IDENTITIES = {'34568564+mouse9527' + '@users.noreply.github.com'}  # split so the e-mail rule passes this file
+# committer only (never author): GitHub's own identity on merge commits it makes (merge button, "Update branch")
+COMMITTER_IDENTITIES = COMMIT_IDENTITIES | {'noreply' + '@github.com'}
 
 
 def scan_text(where: str, text: str, terms: list[str] | None = None) -> list[str]:

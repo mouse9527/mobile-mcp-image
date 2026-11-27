@@ -209,6 +209,8 @@ settle()
 core = call('phone_guide', holder='G0')[1]
 check('phone_guide() = core guide with placeholders filled (idle 3 s, hold 8 s) and the topic index',
       GUIDE in core and '{{' not in core and '约 3 秒' in core and '最多 8 秒' in core and 'app:taobao' in core, core[:40])
+check('core guide says a new session\'s first call keeps the phone only LEASE_SESSION_FIRST_IDLE_S (1 s here)',
+      '第一次调用之后只保持约 1 秒' in core)
 okg, first, _ = call(holder='G1')
 _, second, _ = call(holder='G1')
 check('a holder\'s first phone call gets the core guide appended (not blocked); the next call does not',

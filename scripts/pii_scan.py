@@ -3,8 +3,8 @@
 
 Scans, from git objects (not the working tree):
   - the final tree of HEAD: every file
-  - every commit in RANGE (default origin/main..HEAD): author / committer identity (must be in
-    policy.rules.COMMIT_IDENTITIES), the message, and every file version it adds — history stays public even when a
+  - every commit in RANGE (default origin/main..HEAD): author identity (must be in policy.rules.COMMIT_IDENTITIES),
+    committer identity (policy.rules.COMMITTER_IDENTITIES: the same + GitHub's merge identity), the message, and every file version it adds — history stays public even when a
     later commit removes something
 with the generic rules + the private term list. The term list lives outside every repository; it must exist, be
 0600 (no group / other bits) and non-empty, else the scan fails (fail closed). Symlinks, submodules and binary files
@@ -79,8 +79,8 @@ def scan(rng: str, terms: list[str]) -> dict:
     for c in commits:
         short = c[:12]
         ae, ce = git('show', '-s', '--format=%ae%n%ce', c).split('\n')[:2]
-        for who, email in (('author', ae), ('committer', ce)):
-            if email not in rules.COMMIT_IDENTITIES:
+        for who, email, allowed in (('author', ae, rules.COMMIT_IDENTITIES), ('committer', ce, rules.COMMITTER_IDENTITIES)):
+            if email not in allowed:
                 findings.append(f'{short}: {who} e-mail is not an allowed public identity')
         for who, name in zip(('author', 'committer'), git('show', '-s', '--format=%an%n%cn', c).split('\n')[:2]):
             findings += [f'{short}: {who} name: {f.split(": ", 1)[1]}' for f in rules.scan_text('x', name, terms)]
